@@ -26,12 +26,6 @@ from pandas.core.common import flatten
 # In[2]:
 
 
-pip install dask
-
-
-# In[2]:
-
-
 SAMPLE_RATE = 10000  # Hertz
 u4max = 4294967295
 
