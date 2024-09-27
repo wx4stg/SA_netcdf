@@ -238,13 +238,45 @@ def correct_micros(micros, fs, tol=0.1, window=7):
     else:
         return micros, n_rollovers
 
-
+def interpolate_across_system_times(ds, SAMPLE_RATE=10000):
     
+    nominal_dt = 1.0/SAMPLE_RATE
+    good_sample_thresh = (3*nominal_dt)
+
+    bad_adc = (ds['ADC'].values < 0.0) 
+    adc_minus_system = (ds['dt_adc']-ds['dt_system']).values
+    adc_minus_system[bad_adc] = np.nan
+    jump = np.diff(adc_minus_system, prepend=np.nan)
+
+    # Also blank out the ADC and ADC microseconds where we have bad data.
+    ds['dt_adc'] = ds.dt_adc.where(~bad_adc, other=np.nan)
+    ds['dt_system'] = ds.dt_system.where(~bad_adc, other=np.nan)
+    
+    is_jump = np.abs(jump) > good_sample_thresh
+    jump_idx, = np.where(is_jump)
+    # Include first and last points
+    jump_idx = np.insert(jump_idx, [0,jump_idx.shape[0]], [0,adc_minus_system.shape[0]-1])
+    jump = jump[jump_idx]
+    
+    all_samples = np.arange(adc_minus_system.shape[0])
+    offset_curve = np.interp(all_samples, 
+                             jump_idx,
+                             adc_minus_system[jump_idx])
+    correction = offset_curve - adc_minus_system
+    ds['time'] = ds.time_orig_method - (correction*1e9).astype('timedelta64[ns]')
+    return ds
 
 
 # In[14]:
+    
+# In[14]:
+    
+def add_other_time_vars(ds):
+    ds['dt_system'] = (ds.time_orig_method-ds.time_orig_method[0]).astype('datetime64[ns]').astype('f8')/1e9
+    ds['dt_adc'] = (ds.pps_micro - ds.pps_micro[0]).astype('f8')/1e6
+    return ds
 
-
+#modified 7/27/24 to account for _a/b/c in the file name.
 #VERSION FOR INCLUDING THE UNCORRECTED TIME VIA THE FILE NAME
 #time correction script
 #purpose: add n x 4294967295 each time the pps maxes out
@@ -274,7 +306,8 @@ prev_hr = None
 do_write = False
 for _idx, filename in enumerate(sorted(files)):
     print(filename)
-    T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:-4], "%Y%m%d%H%M%S_%f"))
+    # T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:-6], "%Y%m%d%H%M%S_%f"))
+    T0 = pd.to_datetime(datetime.strptime(os.path.basename(filename)[:22],"%Y%m%d_%H%M%S_%f"))
     print(T0)
     if prev_hr is None: prev_hr = T0.hour
 
@@ -310,6 +343,9 @@ for _idx, filename in enumerate(sorted(files)):
         {'ADC':adc,
          'pps_micro':adc_ready,
          'time_orig_method':time_orig})).reset_index('dim_0').drop_vars('dim_0').rename_dims({'dim_0':'sample'})
+    
+    ds = interpolate_across_system_times(add_other_time_vars(ds))
+    
     # all_data.append(ds)
     
     # if T0.hour != prev_hr:
@@ -322,7 +358,8 @@ for _idx, filename in enumerate(sorted(files)):
     # last_hour_string = last_hour_chunk.strftime('%Y%m%d_%H')
     # fileoutname = last_hour_string+"_"+sensorname+"_"+os.path.basename(files[0])[:-4]+".nc"
     
-    fileoutname = T0.strftime("%Y%m%d%H%M%S_%f")+"-"+sensorname+"-"+os.path.basename(files[0])[:-4]+".nc"
+    # fileoutname = T0.strftime("%Y%m%d%H%M%S_%f")+"-"+sensorname+"-"+os.path.basename(filename)[0][:-4]+".nc"
+    fileoutname = T0.strftime("%Y%m%d%H%M%S_%f")+"_"+sensorname+"_"+os.path.basename(filename)[23:-4]+".nc"
     comp_ds = compress_all(ds)
     # print(comp_ds)
     comp_ds.to_netcdf(fileoutname)
